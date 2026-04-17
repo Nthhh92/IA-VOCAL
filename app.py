@@ -17,7 +17,6 @@ RESTAURANT = os.getenv("RESTAURANT_NAME", "Casa Napoli")
 MANAGER_WA = os.getenv("MANAGER_WHATSAPP")
 
 def extraire_infos(transcription):
-    """Extrait les infos de la commande depuis la transcription"""
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -42,48 +41,45 @@ Reponds UNIQUEMENT en JSON :
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     data = request.json
-    print(f"Webhook recu: {json.dumps(data, indent=2)}")
+    print(f"Webhook recu type: {data.get('type', 'unknown')}")
 
-    # Extraire la transcription selon le format ElevenLabs
+    # Extraire la transcription depuis le format ElevenLabs post-call
     transcription = ""
     
-    # Format post-call webhook ElevenLabs
-    if "transcript" in data:
-        transcript = data["transcript"]
-        if isinstance(transcript, list):
-            transcription = "\n".join([
-                f"{t.get('role', '')}: {t.get('message', '')}" 
-                for t in transcript
-            ])
-        else:
-            transcription = str(transcript)
-    elif "transcription" in data:
-        transcription = data["transcription"]
+    # Le transcript est dans data['transcript'] pour ElevenLabs
+    transcript_list = data.get("transcript", [])
     
-    print(f"Transcription: {transcription}")
+    if not transcript_list:
+        # Essaie dans data['data']['transcript']
+        transcript_list = data.get("data", {}).get("transcript", [])
+    
+    if transcript_list and isinstance(transcript_list, list):
+        lines = []
+        for t in transcript_list:
+            role = t.get("role", "")
+            message = t.get("message", "")
+            if message and message != "...":
+                lines.append(f"{role}: {message}")
+        transcription = "\n".join(lines)
+    
+    print(f"Transcription extraite ({len(transcription)} chars): {transcription[:200]}")
 
-    # Si on a une transcription, extraire les infos avec GPT
     if transcription and len(transcription) > 20:
         try:
             infos = extraire_infos(transcription)
             print(f"Infos extraites: {infos}")
         except Exception as e:
-            print(f"Erreur extraction: {e}")
-            infos = {
-                "type": data.get("type", "appel"),
-                "nom": data.get("nom", ""),
-                "telephone": data.get("telephone", ""),
-                "details": transcription[:500],
-                "total": data.get("total", "")
-            }
+            print(f"Erreur extraction GPT: {e}")
+            infos = {"type": "appel", "nom": "", "telephone": "", "details": transcription[:300], "total": ""}
     else:
-        # Utiliser les données directes si pas de transcription
+        # Utiliser le résumé si pas de transcription
+        summary = data.get("analysis", {}).get("transcript_summary", "")
         infos = {
             "type": data.get("type", "appel"),
-            "nom": data.get("nom", ""),
-            "telephone": data.get("telephone", ""),
-            "details": data.get("details", ""),
-            "total": data.get("total", "")
+            "nom": "",
+            "telephone": "",
+            "details": summary or "Voir transcription",
+            "total": ""
         }
 
     msg = f"""🍕 *{RESTAURANT} — {infos.get('type', 'Appel').upper()}*
@@ -101,7 +97,7 @@ def whatsapp_webhook():
             to=MANAGER_WA,
             body=msg
         )
-        print("WhatsApp envoye avec succes !")
+        print("WhatsApp envoye avec succes!")
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"Erreur WhatsApp: {e}")
